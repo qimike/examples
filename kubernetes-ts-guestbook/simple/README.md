@@ -1,76 +1,99 @@
-[![Deploy this example with Pulumi](https://www.pulumi.com/images/deploy-with-pulumi/dark.svg)](https://app.pulumi.com/new?template=https://github.com/pulumi/examples/blob/master/kubernetes-ts-guestbook/simple/README.md#gh-light-mode-only)
-[![Deploy this example with Pulumi](https://get.pulumi.com/new/button-light.svg)](https://app.pulumi.com/new?template=https://github.com/pulumi/examples/blob/master/kubernetes-ts-guestbook/simple/README.md#gh-dark-mode-only)
+# Kubernetes Guestbook with Prometheus and Grafana
 
-# Kubernetes Guestbook (Simple Variant)
+This Pulumi program deploys:
 
-A version of the [Kubernetes Guestbook](https://kubernetes.io/docs/tutorials/stateless-application/guestbook/)
-application using Pulumi.
+- The Guestbook app (`frontend`, `redis-leader`, `redis-replica`)
+- Prometheus and Grafana via the `kube-prometheus-stack` Helm chart
+- Redis exporter sidecars for backend metrics
+- Blackbox probing for frontend HTTP availability and latency metrics
 
-This is a straight port of the original YAML, and doesn't highlight advantages of using real languages. For an example
-using abstraction to cut down on boilerplate, please see the [variant using components](../components),
-also in this repo. It provisions the same set of resources.
+## Prerequisites
 
-## Running the App
+- Pulumi CLI installed
+- Kubernetes cluster configured in your current `kubectl` context
+- Node.js and npm installed
 
-Follow the steps in [Pulumi Installation](https://www.pulumi.com/docs/get-started/install/) and [Kubernetes Setup](https://www.pulumi.com/docs/intro/cloud-providers/kubernetes/setup/) to get Pulumi working with Kubernetes.
+## Deploy Instructions
 
-Install dependencies:
+Run from this directory (`simple/`):
 
 ```sh
 npm install
+pulumi stack init guestbook-monitoring
 ```
 
-Create a new stack:
+Set required config values:
 
 ```sh
-$ pulumi stack init
-Enter a stack name: testbook
+pulumi config set isMinikube false
+pulumi config set grafanaServiceType LoadBalancer
+pulumi config set --secret grafanaAdminPassword "admin123!ChangeMe"
 ```
 
-This example will attempt to expose the Guestbook application to the Internet with a `Service` of
-type `LoadBalancer`. Since minikube does not support `LoadBalancer`, the Guestbook application
-already knows to use type `ClusterIP` instead; all you need to do is to tell it whether you're
-deploying to minikube:
+If you use `NodePort` for Grafana, also set a node IP:
 
 ```sh
-pulumi config set isMinikube <value>
+pulumi config set grafanaServiceType NodePort
+pulumi config set nodeIp <node-ip>
 ```
 
-Perform the deployment:
+Deploy:
 
 ```sh
-$ pulumi up
-Updating stack 'testbook'
-Performing changes:
-
-     Type                           Name                Status      Info
- +   pulumi:pulumi:Stack            guestbook-testbook  created
- +   ├─ kubernetes:apps:Deployment  redis-leader        created
- +   ├─ kubernetes:apps:Deployment  frontend            created
- +   ├─ kubernetes:apps:Deployment  redis-replica       created
- +   ├─ kubernetes:core:Service     redis-leader        created     1 info message
- +   ├─ kubernetes:core:Service     redis-replica       created     1 info message
- +   └─ kubernetes:core:Service     frontend            created     2 info messages
-
----outputs:---
-frontendIp: "35.232.147.18"
-
-info: 7 changes performed:
-    + 7 resources created
-Update duration: 40.829381902s
-
-Permalink: https://app.pulumi.com/hausdorff/testbook/updates/1
+pulumi up
 ```
 
-And finally - open the application in your browser to see the running application. If you're running
-macOS you can simply run:
+## Grafana Access URL and Admin Credentials
+
+Retrieve access details from stack outputs:
 
 ```sh
-open $(pulumi stack output frontendIp)
+pulumi stack output grafanaUrl
+pulumi stack output grafanaAdminUser
+pulumi stack output --show-secrets grafanaAdminPasswordOutput
 ```
 
-> _Note_: minikube does not support type `LoadBalancer`; if you are deploying to minikube, make sure
-> to run `kubectl port-forward svc/frontend 8080:80` to forward the cluster port to the local
-> machine and access the service via `localhost:8080`.
+Default admin username:
+
+- `admin`
+
+Default admin password:
+
+- Set from `grafanaAdminPassword` Pulumi config
+
+## Verify Guestbook Metrics Are Scraped
+
+Check that monitoring resources exist:
+
+```sh
+kubectl -n monitoring get pods
+kubectl -n monitoring get servicemonitors
+kubectl -n monitoring get probes
+```
+
+Open Prometheus UI (example via port-forward):
+
+```sh
+kubectl -n monitoring port-forward svc/kube-prom-stack-prometheus 9090:9090
+```
+
+Then query these metrics in Prometheus or Grafana Explore:
+
+- `up{job=~".*redis.*"}`
+- `redis_up`
+- `rate(redis_commands_processed_total[5m])`
+- `probe_success{job=~".*frontend-http.*"}`
+- `probe_http_duration_seconds`
+- `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default",pod=~"frontend-.*|redis-.*"}[5m]))`
+- `sum by (pod) (container_memory_working_set_bytes{namespace="default",pod=~"frontend-.*|redis-.*"})`
+
+## Optional: Basic Grafana Dashboard
+
+Create a dashboard with these panels:
+
+- Redis command rate (`rate(redis_commands_processed_total[5m])`)
+- Frontend probe success (`probe_success{job=~".*frontend-http.*"}`)
+- Pod CPU usage for frontend/redis
+- Pod memory usage for frontend/redis
 
 ![Guestbook in browser](./imgs/guestbook.png)
