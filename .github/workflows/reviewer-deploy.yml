@@ -13,6 +13,7 @@ jobs:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
       GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
