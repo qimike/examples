@@ -39,6 +39,7 @@ jobs:
       - name: Pulumi deploy
         working-directory: kubernetes-ts-guestbook/simple
         run: |
+          mkdir -p .pulumi-local
           pulumi login "file://$PWD/.pulumi-local"
           pulumi stack select guestbook-monitoring --non-interactive || pulumi stack init guestbook-monitoring --non-interactive
           pulumi config set isMinikube false --non-interactive
@@ -46,7 +47,7 @@ jobs:
           pulumi up -y --non-interactive
 
       - name: Show Grafana access outputs
-        working-directory: simple
+        working-directory: kubernetes-ts-guestbook/simple
         run: |
           pulumi stack output grafanaAdminUser
           pulumi stack output grafanaUrl
