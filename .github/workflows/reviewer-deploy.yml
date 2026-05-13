@@ -25,9 +25,7 @@ jobs:
           node-version: 24
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@v7
-        with:
-          command: version
+        run: npm install -g @pulumi/pulumi
 
       - name: Configure kubeconfig
         run: |
