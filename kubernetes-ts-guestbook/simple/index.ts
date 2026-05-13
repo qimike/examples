@@ -14,12 +14,26 @@ const grafanaServiceType =
         : isMinikube
           ? "NodePort"
           : "LoadBalancer";
-const grafanaAdminPassword = config.requireSecret("grafanaAdminPassword");
+const grafanaAdminPassword = process.env.GRAFANA_PASSWORD
+        ? pulumi.secret(process.env.GRAFANA_PASSWORD)
+        : config.requireSecret("grafanaAdminPassword");
 const nodeIp = config.get("nodeIp");
 
 const monitoringNamespace = new k8s.core.v1.Namespace("monitoring", {
     metadata: { name: "monitoring" },
 });
+
+const grafanaAdminSecret = new k8s.core.v1.Secret("grafana-admin-credentials", {
+    metadata: {
+        name: "grafana-admin-credentials",
+        namespace: monitoringNamespace.metadata.name,
+    },
+    stringData: {
+        "admin-user": "admin",
+        "admin-password": grafanaAdminPassword,
+    },
+    type: "Opaque",
+}, { dependsOn: monitoringNamespace });
 
 const monitoring = new k8s.helm.v3.Release("kube-prom-stack", {
     chart: "kube-prometheus-stack",
@@ -27,13 +41,14 @@ const monitoring = new k8s.helm.v3.Release("kube-prom-stack", {
     namespace: monitoringNamespace.metadata.name,
     repositoryOpts: { repo: "https://prometheus-community.github.io/helm-charts" },
     timeout: 600,
-    // Don't block Pulumi waiting for every pod to be Ready — large charts
-    // with components that take time on local clusters (e.g. Docker Desktop)
-    // would otherwise time out. Pods are verified separately via kubectl.
     skipAwait: true,
     values: {
         grafana: {
-            adminPassword: grafanaAdminPassword,
+            admin: {
+                existingSecret: grafanaAdminSecret.metadata.name,
+                userKey: "admin-user",
+                passwordKey: "admin-password",
+            },
             service: {
                 type: grafanaServiceType,
             },
@@ -46,7 +61,6 @@ const monitoring = new k8s.helm.v3.Release("kube-prom-stack", {
                 probeNamespaceSelector: {},
             },
         },
-        // node-exporter requires privileged host paths unavailable on Docker Desktop.
         nodeExporter: {
             enabled: false,
         },
@@ -54,7 +68,7 @@ const monitoring = new k8s.helm.v3.Release("kube-prom-stack", {
             enabled: false,
         },
     },
-}, { dependsOn: monitoringNamespace });
+}, { dependsOn: [monitoringNamespace, grafanaAdminSecret] });
 
 const blackboxExporter = new k8s.helm.v3.Release("blackbox-exporter", {
     chart: "prometheus-blackbox-exporter",
@@ -97,7 +111,9 @@ const redisLeaderDeployment = new k8s.apps.v1.Deployment("redis-leader", {
 const redisLeaderService = new k8s.core.v1.Service("redis-leader", {
     metadata: {
         name: "redis-leader",
-        labels: redisLeaderDeployment.metadata.labels,
+        labels: {
+            app: "redis-leader",
+        },
     },
     spec: {
         ports: [
@@ -143,7 +159,9 @@ const redisReplicaDeployment = new k8s.apps.v1.Deployment("redis-replica", {
 const redisReplicaService = new k8s.core.v1.Service("redis-replica", {
     metadata: {
         name: "redis-replica",
-        labels: redisReplicaDeployment.metadata.labels,
+        labels: {
+            app: "redis-replica",
+        },
     },
     spec: {
         ports: [
@@ -199,6 +217,9 @@ const redisLeaderServiceMonitor = new k8s.apiextensions.CustomResource("redis-le
     metadata: {
         name: "redis-leader",
         namespace: monitoringNamespace.metadata.name,
+        labels: {
+            release: monitoring.status.name,
+        },
     },
     spec: {
         namespaceSelector: { matchNames: ["default"] },
@@ -213,6 +234,9 @@ const redisReplicaServiceMonitor = new k8s.apiextensions.CustomResource("redis-r
     metadata: {
         name: "redis-replica",
         namespace: monitoringNamespace.metadata.name,
+        labels: {
+            release: monitoring.status.name,
+        },
     },
     spec: {
         namespaceSelector: { matchNames: ["default"] },
@@ -221,14 +245,15 @@ const redisReplicaServiceMonitor = new k8s.apiextensions.CustomResource("redis-r
     },
 }, { dependsOn: monitoring });
 
-// The guestbook frontend image does not expose Prometheus metrics directly.
-// Probe the frontend service via blackbox exporter to capture request/availability metrics.
 const frontendProbe = new k8s.apiextensions.CustomResource("frontend-probe", {
     apiVersion: "monitoring.coreos.com/v1",
     kind: "Probe",
     metadata: {
         name: "frontend-http",
         namespace: monitoringNamespace.metadata.name,
+        labels: {
+            release: monitoring.status.name,
+        },
     },
     spec: {
         interval: "30s",
@@ -244,6 +269,152 @@ const frontendProbe = new k8s.apiextensions.CustomResource("frontend-probe", {
     },
 }, { dependsOn: [monitoring, blackboxExporter] });
 
+const guestbookDashboard = {
+    uid: "guestbook-overview",
+    title: "Guestbook Overview",
+    timezone: "browser",
+    schemaVersion: 39,
+    version: 1,
+    refresh: "30s",
+    time: {
+        from: "now-1h",
+        to: "now",
+    },
+    tags: ["guestbook", "pulumi"],
+    annotations: {
+        list: [
+            {
+                builtIn: 1,
+                datasource: {
+                    type: "grafana",
+                    uid: "-- Grafana --",
+                },
+                enable: true,
+                hide: true,
+                iconColor: "rgba(0, 211, 255, 1)",
+                name: "Annotations & Alerts",
+                type: "dashboard",
+            },
+        ],
+    },
+    templating: {
+        list: [],
+    },
+    panels: [
+        {
+            id: 1,
+            type: "timeseries",
+            title: "Redis Command Rate (ops/s)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 12, x: 0, y: 0 },
+            targets: [
+                {
+                    expr: "sum(rate(redis_commands_processed_total{namespace=\"default\"}[5m]))",
+                    legendFormat: "total",
+                    refId: "A",
+                },
+            ],
+        },
+        {
+            id: 2,
+            type: "stat",
+            title: "Frontend Probe Success (5m avg)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 6, x: 12, y: 0 },
+            targets: [
+                {
+                    expr: "100 * avg_over_time(probe_success{job=~\".*frontend-http.*\"}[5m])",
+                    refId: "A",
+                },
+            ],
+            options: {
+                reduceOptions: { calcs: ["lastNotNull"], fields: "", values: false },
+                orientation: "auto",
+                textMode: "auto",
+                colorMode: "value",
+                graphMode: "area",
+                justifyMode: "auto",
+            },
+            fieldConfig: {
+                defaults: {
+                    unit: "percent",
+                    decimals: 2,
+                    thresholds: {
+                        mode: "absolute",
+                        steps: [
+                            { color: "red", value: 0 },
+                            { color: "orange", value: 90 },
+                            { color: "green", value: 99 },
+                        ],
+                    },
+                },
+                overrides: [],
+            },
+        },
+        {
+            id: 3,
+            type: "timeseries",
+            title: "Frontend Probe Duration (s)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 6, x: 18, y: 0 },
+            targets: [
+                {
+                    expr: "avg_over_time(probe_duration_seconds{job=~\".*frontend-http.*\"}[5m])",
+                    legendFormat: "frontend",
+                    refId: "A",
+                },
+            ],
+        },
+        {
+            id: 4,
+            type: "timeseries",
+            title: "Pod CPU Usage (cores)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 12, x: 0, y: 8 },
+            targets: [
+                {
+                    expr: "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\"frontend-.*|redis-.*\"}[5m]))",
+                    legendFormat: "{{pod}}",
+                    refId: "A",
+                },
+            ],
+        },
+        {
+            id: 5,
+            type: "timeseries",
+            title: "Pod Memory Usage (bytes)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 12, x: 12, y: 8 },
+            targets: [
+                {
+                    expr: "sum by (pod) (container_memory_working_set_bytes{namespace=\"default\",pod=~\"frontend-.*|redis-.*\"})",
+                    legendFormat: "{{pod}}",
+                    refId: "A",
+                },
+            ],
+            fieldConfig: {
+                defaults: {
+                    unit: "bytes",
+                },
+                overrides: [],
+            },
+        },
+    ],
+};
+
+const guestbookDashboardConfigMap = new k8s.core.v1.ConfigMap("guestbook-grafana-dashboard", {
+    metadata: {
+        name: "guestbook-overview-dashboard",
+        namespace: monitoringNamespace.metadata.name,
+        labels: {
+            grafana_dashboard: "1",
+        },
+    },
+    data: {
+        "guestbook-overview.json": JSON.stringify(guestbookDashboard, null, 2),
+    },
+}, { dependsOn: monitoring });
+
 // Export the frontend IP.
 export let frontendIp: pulumi.Output<string>;
 if (isMinikube) {
@@ -255,31 +426,32 @@ if (isMinikube) {
 export const grafanaAdminUser = "admin";
 export const grafanaAdminPasswordOutput = grafanaAdminPassword;
 
-// The Grafana service URL is only known after the cluster assigns an IP/NodePort.
-// Use the command below after `pulumi up` completes to retrieve it.
 export const grafanaUrl = pulumi.output(grafanaServiceType).apply(svcType => {
-    const svcName = "kube-prom-stack-grafana";
     const ns = "monitoring";
+    const selector = "-l app.kubernetes.io/name=grafana";
 
     if (svcType === "LoadBalancer") {
         return (
-            `After deploy, run:\n` +
-            `  kubectl get svc ${svcName} -n ${ns} -o jsonpath='{.status.loadBalancer.ingress[0].ip}'\n` +
-            `Then open: http://<that-ip>`
+            `After deploy, Grafana will be available at:\n` +
+            `1. Check service: kubectl get svc -n ${ns} ${selector}\n` +
+            `2. Get IP: kubectl get svc -n ${ns} ${selector} -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'\n` +
+            `3. If <pending>, use port-forward: kubectl -n ${ns} port-forward svc/GRAFANA_SVC 3000:80\n` +
+            `4. Open http://localhost:3000\nUsername: admin`
         );
     }
 
     if (svcType === "NodePort") {
-        const nodePortCmd = `kubectl get svc ${svcName} -n ${ns} -o jsonpath='{.spec.ports[0].nodePort}'`;
         return nodeIp
-            ? `After deploy, run:\n  ${nodePortCmd}\nThen open: http://${nodeIp}:<nodeport>`
-            : `After deploy, get nodePort with:\n  ${nodePortCmd}\nThen open: http://<node-ip>:<nodeport>\n(set pulumi config nodeIp to auto-fill the node IP)`;
+            ? `Get NodePort: kubectl get svc -n ${ns} ${selector} -o jsonpath='{.items[0].spec.ports[0].nodePort}'\nOpen: http://${nodeIp}:<nodeport>`
+            : `Get NodePort: kubectl get svc -n ${ns} ${selector} -o jsonpath='{.items[0].spec.ports[0].nodePort}'\nOpen: http://<node-ip>:<nodeport>`;
     }
 
-    return `After deploy, run: kubectl get svc ${svcName} -n ${ns}`;
+    return "Unknown service type";
 });
 
 export const monitoringNamespaceName = monitoringNamespace.metadata.name;
 export const redisLeaderServiceMonitorName = redisLeaderServiceMonitor.metadata.name;
 export const redisReplicaServiceMonitorName = redisReplicaServiceMonitor.metadata.name;
 export const frontendProbeName = frontendProbe.metadata.name;
+export const grafanaDashboardName = guestbookDashboardConfigMap.metadata.name;
+export const grafanaDashboardUid = guestbookDashboard.uid;

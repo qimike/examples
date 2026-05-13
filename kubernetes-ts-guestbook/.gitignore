@@ -1,0 +1,17 @@
+# Node dependencies
+**/node_modules/
+
+# Local Pulumi state/backends and secrets
+**/.pulumi/
+**/.pulumi-local/
+**/Pulumi.*.yaml.backup
+**/Pulumi.*.yaml.tmp
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
