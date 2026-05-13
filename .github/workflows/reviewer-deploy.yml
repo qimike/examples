@@ -1,0 +1,53 @@
+name: Reviewer Deploy Guestbook Monitoring
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+      GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@v6
+        with:
+          command: version
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 --decode > "$HOME/.kube/config"
+
+      - name: Install dependencies
+        working-directory: simple
+        run: npm ci
+
+      - name: Pulumi deploy
+        working-directory: simple
+        run: |
+          pulumi login "file://$PWD/.pulumi-local"
+          pulumi stack select guestbook-monitoring --non-interactive || pulumi stack init guestbook-monitoring --non-interactive
+          pulumi config set isMinikube false --non-interactive
+          pulumi config set grafanaServiceType LoadBalancer --non-interactive
+          pulumi up -y --non-interactive
+
+      - name: Show Grafana access outputs
+        working-directory: simple
+        run: |
+          pulumi stack output grafanaAdminUser
+          pulumi stack output grafanaUrl
