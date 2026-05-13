@@ -200,7 +200,7 @@ Reviewers with repository access can now deploy:
 1. Go to repository **Actions** tab
 2. Select **Reviewer Deploy Guestbook Monitoring** workflow
 3. Click **Run workflow**
-4. Select branch (default: `main` or your current branch)
+4. Select branch (`guestbook-monitoring`)
 5. Click **Run workflow** button
 6. Monitor the workflow execution (typically 3-5 minutes)
 
