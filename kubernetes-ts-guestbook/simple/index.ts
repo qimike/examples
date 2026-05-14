@@ -269,6 +269,30 @@ const frontendProbe = new k8s.apiextensions.CustomResource("frontend-probe", {
     },
 }, { dependsOn: [monitoring, blackboxExporter] });
 
+const frontendApiProbe = new k8s.apiextensions.CustomResource("frontend-api-probe", {
+    apiVersion: "monitoring.coreos.com/v1",
+    kind: "Probe",
+    metadata: {
+        name: "guestbook-get-call",
+        namespace: monitoringNamespace.metadata.name,
+        labels: {
+            release: monitoring.status.name,
+        },
+    },
+    spec: {
+        interval: "15s",
+        module: "http_2xx",
+        prober: {
+            url: "blackbox-exporter.monitoring.svc.cluster.local:9115",
+        },
+        targets: {
+            staticConfig: {
+                static: ["http://frontend.default.svc.cluster.local/guestbook.php?cmd=get&key=messages"],
+            },
+        },
+    },
+}, { dependsOn: [monitoring, blackboxExporter] });
+
 const guestbookDashboard = {
     uid: "guestbook-overview",
     title: "Guestbook Overview",
@@ -318,19 +342,19 @@ const guestbookDashboard = {
         {
             id: 2,
             type: "stat",
-            title: "Frontend Probe Success (5m avg)",
+            title: "Guestbook API Success (5m avg)",
             datasource: "Prometheus",
             gridPos: { h: 8, w: 6, x: 12, y: 0 },
             targets: [
                 {
-                    expr: "100 * avg_over_time(probe_success{job=~\".*frontend-http.*\"}[5m])",
+                    expr: "100 * avg_over_time(probe_success{job=~\".*guestbook-get-call.*\"}[5m])",
                     refId: "A",
                 },
             ],
             options: {
                 reduceOptions: { calcs: ["lastNotNull"], fields: "", values: false },
                 orientation: "auto",
-                textMode: "auto",
+                textMode: "value",
                 colorMode: "value",
                 graphMode: "area",
                 justifyMode: "auto",
@@ -344,7 +368,7 @@ const guestbookDashboard = {
                         steps: [
                             { color: "red", value: 0 },
                             { color: "orange", value: 90 },
-                            { color: "green", value: 99 },
+                            { color: "green", value: 100 },
                         ],
                     },
                 },
@@ -354,13 +378,27 @@ const guestbookDashboard = {
         {
             id: 3,
             type: "timeseries",
-            title: "Frontend Probe Duration (s)",
+            title: "Guestbook API Duration (s)",
             datasource: "Prometheus",
             gridPos: { h: 8, w: 6, x: 18, y: 0 },
             targets: [
                 {
-                    expr: "avg_over_time(probe_duration_seconds{job=~\".*frontend-http.*\"}[5m])",
-                    legendFormat: "frontend",
+                    expr: "avg_over_time(probe_duration_seconds{job=~\".*guestbook-get-call.*\"}[5m])",
+                    legendFormat: "guestbook-api",
+                    refId: "A",
+                },
+            ],
+        },
+        {
+            id: 6,
+            type: "timeseries",
+            title: "Guestbook API Successful Requests (5m)",
+            datasource: "Prometheus",
+            gridPos: { h: 8, w: 24, x: 0, y: 16 },
+            targets: [
+                {
+                    expr: "sum(sum_over_time(probe_success{job=~\".*guestbook-get-call.*\"}[5m]))",
+                    legendFormat: "successful_probe_requests",
                     refId: "A",
                 },
             ],
@@ -453,5 +491,6 @@ export const monitoringNamespaceName = monitoringNamespace.metadata.name;
 export const redisLeaderServiceMonitorName = redisLeaderServiceMonitor.metadata.name;
 export const redisReplicaServiceMonitorName = redisReplicaServiceMonitor.metadata.name;
 export const frontendProbeName = frontendProbe.metadata.name;
+export const frontendApiProbeName = frontendApiProbe.metadata.name;
 export const grafanaDashboardName = guestbookDashboardConfigMap.metadata.name;
 export const grafanaDashboardUid = guestbookDashboard.uid;

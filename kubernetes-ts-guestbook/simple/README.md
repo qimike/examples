@@ -1,10 +1,10 @@
-# Kubernetes Guestbook with Prometheus and Grafana
+# Kubernetes Guestbook with Prometheus and Grafana (Local Development)
 
-Complete infrastructure-as-code deployment of the Kubernetes Guestbook application with Prometheus monitoring and Grafana dashboards via Pulumi.
+**⚠️ LOCAL ENVIRONMENT ONLY**: This guide is for running the Guestbook application with monitoring stack on your local Docker Desktop Kubernetes cluster. For cloud deployments, modify the configuration accordingly.
 
 ## Overview
 
-This Pulumi program deploys:
+This Pulumi program deploys to your local Docker Desktop Kubernetes:
 
 - **Guestbook Application**: Multi-tier app with frontend (PHP), Redis leader, and Redis replicas
 - **Prometheus Stack**: Via `kube-prometheus-stack` Helm chart (Prometheus, Grafana, AlertManager)
@@ -15,10 +15,26 @@ This Pulumi program deploys:
 
 ## Prerequisites
 
+- **Docker Desktop**: [Install](https://www.docker.com/products/docker-desktop) with Kubernetes enabled
+- **kubectl**: Pre-installed with Docker Desktop
 - **Pulumi CLI**: [Install](https://www.pulumi.com/docs/get-started/install/)
-- **Kubernetes Cluster**: Configured in your current `kubectl` context (Docker Desktop, minikube, or cloud K8s)
 - **Node.js 18+**: With npm
-- **kubectl**: Configured and able to access your cluster
+
+## Setup Docker Desktop Kubernetes
+
+**Skip this if Kubernetes is already enabled.**
+
+1. Open **Docker Desktop** → **Settings/Preferences**
+2. Go to **Kubernetes** tab
+3. Check **Enable Kubernetes**
+4. Click **Apply & Restart** and wait 2-3 minutes for Kubernetes to start
+
+Verify it's running:
+
+```bash
+kubectl cluster-info
+# Should show: Kubernetes control plane is running at https://kubernetes.docker.internal:6443
+```
 
 ## Deployment Instructions
 
@@ -37,49 +53,56 @@ Or extract the provided zip file and navigate to the `simple/` directory.
 npm install
 ```
 
-### 3. Initialize Pulumi Stack
+### 3. Create Pulumi Local Stack
 
 ```bash
+# Create a local Pulumi backend directory
+mkdir -p .pulumi-local
+
+# Initialize the stack
+pulumi login "file://$(pwd)/.pulumi-local"
 pulumi stack init guestbook-monitoring
 ```
 
-This creates a local deployment configuration. The stack name `guestbook-monitoring` is optional—change it to any name you prefer.
+### 4. Configure for Local Docker Desktop
 
-### 4. Configure Required Settings
-
-Set the deployment configuration:
+Set the required configuration:
 
 ```bash
+# For Docker Desktop (recommended)
 pulumi config set isMinikube false
 pulumi config set grafanaServiceType LoadBalancer
-export GRAFANA_PASSWORD="YourSecurePassword123!"
+
+# Set secrets without hardcoding values in files/shell history (zsh)
+read -s "GRAFANA_PASSWORD?Grafana admin password: "; echo
+read -s "PULUMI_CONFIG_PASSPHRASE?Pulumi config passphrase: "; echo
+export GRAFANA_PASSWORD
+export PULUMI_CONFIG_PASSPHRASE
+
+# If using bash instead of zsh:
+# read -s -p "Grafana admin password: " GRAFANA_PASSWORD; echo
+# read -s -p "Pulumi config passphrase: " PULUMI_CONFIG_PASSPHRASE; echo
+
+# Optional: sync the same values to GitHub Actions secrets
+# Install GitHub CLI on macOS if needed: brew install gh
+# Authenticate once: gh auth login
+gh secret set GRAFANA_PASSWORD --body "$GRAFANA_PASSWORD"
+gh secret set PULUMI_CONFIG_PASSPHRASE --body "$PULUMI_CONFIG_PASSPHRASE"
 ```
+
+Note: GitHub Actions secrets are write-only. You can set or update them, but you cannot read secret values back from GitHub to your local machine. If you need local and CI to share the same values, keep a local source of truth (password manager or local env file) and push to GitHub with `gh secret set`.
+
+If you do not want to install `gh`, set the same secrets manually in GitHub UI:
+`Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`.
 
 **Configuration Options:**
 
-| Config               | Value                        | Description                                                                  |
-| -------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
-| `isMinikube`         | `true` or `false`            | Set to `true` for minikube clusters (uses ClusterIP instead of LoadBalancer) |
-| `grafanaServiceType` | `LoadBalancer` or `NodePort` | How to expose Grafana service                                                |
-| `GRAFANA_PASSWORD`   | Any string                   | Admin password for Grafana (read from environment or GitHub Secret)          |
-| `nodeIp`             | IP address                   | (Optional) Node IP for NodePort access; used in `grafanaUrl` output          |
-
-**Example for Docker Desktop:**
-
-```bash
-pulumi config set isMinikube false
-pulumi config set grafanaServiceType LoadBalancer
-export GRAFANA_PASSWORD="admin123!ChangeMe"
-```
-
-**Example for Minikube:**
-
-```bash
-pulumi config set isMinikube true
-pulumi config set grafanaServiceType NodePort
-pulumi config set nodeIp 192.168.49.2  # Your minikube IP
-export GRAFANA_PASSWORD="admin123!ChangeMe"
-```
+| Config                     | Value          | Description                                         |
+| -------------------------- | -------------- | --------------------------------------------------- |
+| `isMinikube`               | `false`        | Set to `false` for Docker Desktop                   |
+| `grafanaServiceType`       | `LoadBalancer` | How to expose Grafana (use LoadBalancer for Docker) |
+| `GRAFANA_PASSWORD`         | Any string     | Admin password for Grafana (set as env var)         |
+| `PULUMI_CONFIG_PASSPHRASE` | Any string     | Encryption key for local Pulumi state               |
 
 ### 5. Deploy
 
@@ -89,215 +112,111 @@ pulumi up
 
 Review the resource plan and press `yes` to deploy. Deployment typically takes 2-3 minutes.
 
-## Accessing Grafana and Credentials
+## Sharing Access with Local Reviewers
 
-### Retrieve Grafana Access Information
+## Accessing Grafana Locally
 
-The Grafana username is `admin`.
-
-The Grafana password is injected into Kubernetes via secret `grafana-admin-credentials` (using `GRAFANA_PASSWORD` from environment/GitHub Secrets).
+### Get Admin Credentials
 
 **Username:**
 
 ```bash
 kubectl -n monitoring get secret grafana-admin-credentials -o jsonpath='{.data.admin-user}' | base64 --decode; echo
+# Output: admin
 ```
 
 **Password:**
 
 ```bash
 kubectl -n monitoring get secret grafana-admin-credentials -o jsonpath='{.data.admin-password}' | base64 --decode; echo
+# Output: (the GRAFANA_PASSWORD you set earlier)
 ```
 
-If you do not have permission to read Kubernetes secrets, ask the repository owner to share credentials out of band.
+### Access Grafana via Port Forwarding
 
-**Access URL:**
+Run this command in a terminal:
 
 ```bash
-pulumi stack output grafanaUrl
-# Output will show instructions for your service type (LoadBalancer or NodePort)
+kubectl -n monitoring port-forward svc/grafana 3000:80
 ```
 
-### Open Grafana Dashboard
+You should see:
 
-**For Docker Desktop or local clusters** (recommended):
-
-If LoadBalancer shows `<pending>`, use port-forwarding:
-
-```bash
-kubectl -n monitoring port-forward svc/kube-prom-stack-672aa7d9-grafana 3000:80 &
-# Then open: http://localhost:3000
+```
+Forwarding from 127.0.0.1:3000 -> 3000
 ```
 
-**For cloud Kubernetes** (if LoadBalancer IP is assigned):
+Then open your web browser to: **http://localhost:3000**
 
-```bash
-kubectl get svc -n monitoring -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
-# Then open: http://<that-ip>:80
-```
+### Log In to Grafana
 
-**For NodePort** (Minikube with NodePort config):
-
-```bash
-kubectl get svc -n monitoring -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].spec.ports[0].nodePort}'
-# Then open: http://<node-ip>:<that-port>
-```
-
-### About Admin Password Security
-
-**⚠️ DO NOT commit the password to version control.** The README.md file should never contain credentials.
-
-- The password value is sourced from `GRAFANA_PASSWORD` and written to Kubernetes secret `grafana-admin-credentials`
-- In CI, store the password in GitHub repository secret `GRAFANA_PASSWORD`
-- Never hardcode passwords in README or CI/CD pipelines
-
-**Regarding the Pulumi Passphrase (`PULUMI_CONFIG_PASSPHRASE`):**
-
-- The passphrase is used to **encrypt/decrypt** your Pulumi secrets before storing them
-- It is required for Pulumi state encryption/decryption when running `pulumi up` with a local backend
-- **Do NOT include** the passphrase in README.md
-- If a reviewer runs GitHub Actions, store the passphrase in GitHub secret `PULUMI_CONFIG_PASSPHRASE`
-- Store it securely (environment variable, password manager, CI/CD secrets)
-- If you lose it, you can re-initialize the stack but will lose encrypted secrets
-
-## Reviewer Setup & Deployment Guide (GitHub Actions)
-
-This repository includes an automated deployment workflow for reviewers: `.github/workflows/reviewer-deploy.yml`.
-
-### Step 1: Set Up Repository Secrets
-
-Repository owners must configure three secrets before reviewers can deploy:
-
-1. Go to repository **Settings → Secrets and variables → Actions**
-2. Click **New repository secret** and add these three secrets:
-
-| Secret Name                | Value                                 | Description                                    |
-| -------------------------- | ------------------------------------- | ---------------------------------------------- |
-| `GRAFANA_PASSWORD`         | Example: `YourSecurePassword123!`     | Admin password for Grafana (set by repo owner) |
-| `PULUMI_CONFIG_PASSPHRASE` | Example: `guestbook-monitoring-local` | Encryption passphrase for Pulumi state         |
-| `KUBECONFIG_B64`           | Base64-encoded kubeconfig (see below) | Kubernetes cluster config (base64-encoded)     |
-
-**To create `KUBECONFIG_B64`:**
-
-```bash
-# Get your kubectl kubeconfig and encode it
-cat ~/.kube/config | base64 | pbcopy
-# Then paste into GitHub secret
-```
-
-Or on Linux:
-
-```bash
-cat ~/.kube/config | base64 -w0 | xclip -selection clipboard
-```
-
-**⚠️ Security Note:** These secrets are write-only in GitHub UI and only accessible to workflows. Never print them in logs.
-
-### Step 2: Reviewer Triggers Deployment
-
-Reviewers with repository access can now deploy:
-
-1. Go to repository **Actions** tab
-2. Select **Reviewer Deploy Guestbook Monitoring** workflow
-3. Click **Run workflow**
-4. Select branch (`master`)
-5. Click **Run workflow** button
-6. Monitor the workflow execution (typically 3-5 minutes)
-
-### Step 3: Access Grafana After Deployment
-
-After the workflow completes successfully:
-
-**Option A: Get access from workflow output**
-
-1. Click the completed workflow run
-2. Read the **workflow output** for `grafanaUrl` and instructions
-
-**Option B: Retrieve credentials manually**
-
-If you have `kubectl` access to the cluster:
-
-Get username:
-
-```bash
-kubectl -n monitoring get secret grafana-admin-credentials -o jsonpath='{.data.admin-user}' | base64 --decode; echo
-```
-
-Get password:
-
-```bash
-kubectl -n monitoring get secret grafana-admin-credentials -o jsonpath='{.data.admin-password}' | base64 --decode; echo
-```
-
-Get Grafana URL (local clusters with pending LoadBalancer):
-
-```bash
-kubectl -n monitoring port-forward svc/kube-prom-stack-672aa7d9-grafana 3000:80 &
-# Then open: http://localhost:3000
-```
-
-**Option C: Ask repository owner**
-
-If you don't have kubectl access, ask the repository owner to provide credentials out of band.
-
-### Step 4: Log Into Grafana Dashboard
-
-1. Open Grafana at the URL from Step 3
+1. Open **http://localhost:3000** in your browser
 2. Click **Sign in**
 3. Enter credentials:
     - **Username:** `admin`
-    - **Password:** (from Step 3)
+    - **Password:** (from the command above)
 4. Click **Sign in**
 5. Navigate to **Dashboards → Browse**
 6. Open **"Guestbook Overview"** dashboard
 7. Verify all 5 panels display live metrics
 
-### Reviewer Troubleshooting
+### Sharing with Other Reviewers on Your Network
 
-**Workflow fails with "secrets not found":**
+If reviewers are on the same machine, they can use the same `kubectl port-forward` command.
 
-- Verify all three secrets are set in repository settings
-- Check secret names match exactly (case-sensitive)
+If reviewers are on a different machine and you want to share:
 
-**Cannot retrieve credentials with kubectl:**
-
-- You may not have read permission for Kubernetes secrets
-- Ask repository owner for out-of-band credential sharing
-
-**Grafana dashboard shows "No data":**
-
-- Workflow may still be deploying (takes 2-3 minutes)
-- Check that Prometheus targets are scraping (see "Verifying Prometheus Metrics Collection" section)
-
-## Verifying Prometheus Metrics Collection
-
-### Step 1: Check Monitoring Resources
+**Option 1: Temporary tunnel with ngrok**
 
 ```bash
-# View monitoring namespace status
-kubectl -n monitoring get pods
-
-# Verify ServiceMonitor resources were created
-kubectl -n monitoring get servicemonitors
-
-# Verify Probe resources for HTTP probing
-kubectl -n monitoring get probes
+# Install ngrok: https://ngrok.com/download
+ngrok http 3000
+# Share the URL with reviewers (valid for 2 hours)
 ```
 
-Expected output includes pods like:
-
-- `kube-prom-stack-*-prometheus-*`
-- `kube-prom-stack-grafana-*`
-- `blackbox-exporter-*`
-
-### Step 2: Open Prometheus UI
-
-Access Prometheus to verify targets are being scraped:
+**Option 2: SSH tunnel to your machine**
 
 ```bash
-# Port-forward Prometheus service
-kubectl -n monitoring port-forward svc/kube-prom-stack-672aa7d9-k-prometheus 9090:9090
-# URL: http://localhost:9090
+# On reviewer's machine:
+ssh -L 3000:localhost:3000 user@your-machine-ip
+# Then open http://localhost:3000
+```
+
+## About Admin Password Security
+
+**⚠️ DO NOT commit the password to version control.** The README.md file should never contain credentials.
+
+- Keep `GRAFANA_PASSWORD` and `PULUMI_CONFIG_PASSPHRASE` as **environment variables only**
+- Store them in your shell profile (`.zshrc`, `.bashrc`, etc.) locally, never in git
+- When sharing with reviewers, provide the password **out of band** (Slack, email, secure note app)
+- If a reviewer needs to repeat the deployment, they must set their own password
+
+## Verifying Prometheus Metrics Collection (Advanced)
+
+### Check Monitoring Resources Are Running
+
+```bash
+# View all monitoring namespace resources
+kubectl -n monitoring get all
+
+# View live pod status
+kubectl -n monitoring get pods -w  # Press Ctrl+C to exit
+```
+
+Expected pods:
+
+- `kube-prom-stack-prometheus-*`
+- `kube-prom-stack-grafana-*`
+- `grafana-*`
+- `blackbox-exporter-*`
+
+### Access Prometheus UI Directly
+
+```bash
+# Forward Prometheus port
+kubectl -n monitoring port-forward svc/kube-prom-stack-prometheus 9090:9090 &
+
+# Open in browser: http://localhost:9090
 ```
 
 In Prometheus UI:
@@ -308,9 +227,9 @@ In Prometheus UI:
     - `redis-replica`
     - `probe/monitoring/frontend-http`
 
-### Step 3: Query Metrics
+### Test PromQL Queries
 
-In Prometheus **Graph** tab, test these queries:
+In Prometheus **Graph** tab, run these queries to verify metrics:
 
 ```promql
 # Check all targets are up
@@ -319,37 +238,23 @@ up{job=~".*redis.*|.*frontend-http.*"}
 # Redis command rate
 rate(redis_commands_processed_total{namespace="default"}[5m])
 
-# Frontend probe success percentage
+# Frontend HTTP success rate
 100 * avg_over_time(probe_success{job=~".*frontend-http.*"}[5m])
 
-# Frontend probe duration
+# Frontend response time
 probe_duration_seconds{job=~".*frontend-http.*"}
-
-# Pod CPU usage
-sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default",pod=~"frontend-.*|redis-.*"}[5m]))
-
-# Pod memory usage
-sum by (pod) (container_memory_working_set_bytes{namespace="default",pod=~"frontend-.*|redis-.*"})
 ```
 
-### Step 4: View Auto-Provisioned Grafana Dashboard
-
-The stack automatically provisions a "Guestbook Overview" dashboard with 5 panels:
-
-1. **Redis Command Rate** - Commands processed per second
-2. **Frontend Probe Success** - HTTP availability as percentage
-3. **Frontend Probe Duration** - HTTP response time in seconds
-4. **Pod CPU Usage** - CPU cores consumed by each pod
-5. **Pod Memory Usage** - Memory (bytes) for each pod
-
-In Grafana UI:
-
-1. Log in with `admin` user and your configured password
-2. Click **Dashboards → Browse**
-3. Find and open **"Guestbook Overview"**
-4. Verify all 5 panels show data (no "No data" errors)
-
 ## Cleanup
+
+### Stop Port Forwarding Sessions
+
+Kill any background port-forward processes:
+
+```bash
+# Kill all port-forward sessions
+pkill -f "kubectl.*port-forward" || true
+```
 
 ### Destroy the Deployment
 
@@ -357,54 +262,96 @@ In Grafana UI:
 pulumi destroy
 ```
 
-This removes all Kubernetes resources created by Pulumi.
+Review the resources to be deleted and press `yes`. This removes all Kubernetes resources created by Pulumi.
 
-### (Optional) Remove Local State
+### (Optional) Remove Local Pulumi State
 
 ```bash
+# This permanently deletes all Pulumi state and stack information
 rm -rf .pulumi-local
+# Remove the stack reference
+pulumi stack rm guestbook-monitoring
 ```
 
-**⚠️ Warning:** This permanently deletes your Pulumi state files. Only do this if you won't need to manage the stack again.
+**⚠️ Warning:** This is irreversible. Only do this if you won't need to manage this stack again.
 
 ## Troubleshooting
 
 ### Dashboard Panels Show "No data"
 
-**Check Prometheus targets:**
+Data may take 1-2 minutes to appear after deployment. If still empty:
+
+**Check Prometheus is scraping targets:**
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prom-stack-prometheus 9090:9090 &
+# Then open http://localhost:9090
+# Go to Status → Targets
+# Verify all three jobs show (1/1 up):
+#  - redis-leader
+#  - redis-replica
+#  - probe/monitoring/frontend-http
+```
+
+**Check Prometheus logs:**
 
 ```bash
 kubectl -n monitoring logs -l app.kubernetes.io/name=prometheus --tail=50
 ```
 
-**Verify ServiceMonitors:**
+### Grafana Login Fails / Wrong Password
+
+**Reset the admin password:**
 
 ```bash
-kubectl -n monitoring get servicemonitor redis-leader -o yaml
+# Get the Grafana pod name
+POD=$(kubectl -n monitoring get pods -l app.kubernetes.io/name=grafana -o name | head -1)
+
+# Reset password to 'newpassword' (change this!)
+kubectl -n monitoring exec -it $POD -- grafana-cli admin reset-admin-password newpassword
+
+# Then log in with username: admin, password: newpassword
 ```
 
-### Grafana Login Fails
+### Kubernetes shows "kubectl not found"
 
-**Retrieve the correct password:**
+Ensure Docker Desktop Kubernetes is enabled:
+
+1. Open **Docker Desktop** → **Settings/Preferences**
+2. Go to **Kubernetes** tab
+3. Check **Enable Kubernetes**
+4. Verify: `kubectl cluster-info`
+
+### Cannot connect to Kubernetes API
+
+Docker Desktop Kubernetes may have crashed. Restart it:
 
 ```bash
-kubectl -n monitoring get secret grafana-admin-credentials -o jsonpath='{.data.admin-password}' | base64 --decode; echo
+# Restart the entire Docker Desktop application
+pkill Docker  # macOS only
+# Then reopen Docker Desktop and wait 2-3 minutes for Kubernetes to boot
 ```
 
-**Reset password in Grafana pod:**
+Or check Docker Desktop logs for errors.
 
-```bash
-kubectl -n monitoring exec -it $(kubectl -n monitoring get pods -l app.kubernetes.io/name=grafana -o name | head -1) -- grafana-cli admin reset-admin-password newpassword
-```
+## Auto-Provisioned Grafana Dashboard
 
-### Blackbox Exporter Not Found
+The stack automatically creates and provisions a **"Guestbook Overview"** dashboard with 5 panels:
 
-**Check blackbox-exporter Helm release:**
+1. **Redis Command Rate** — Commands processed per second
+2. **Frontend HTTP Success Rate** — HTTP availability as percentage
+3. **Frontend Response Time** — HTTP response time in seconds (p99)
+4. **Pod CPU Usage** — CPU cores consumed by each pod
+5. **Pod Memory Usage** — Memory (MB) for each pod
 
-```bash
-helm list -n monitoring
-kubectl -n monitoring get pods | grep blackbox
-```
+**To view the dashboard:**
+
+1. Log in to Grafana (see [Accessing Grafana](#accessing-grafana-locally))
+2. Click **Dashboards → Browse**
+3. Find and open **"Guestbook Overview"**
+4. Verify all 5 panels show live data
+
+If panels show "No data", wait 1-2 minutes for Prometheus to collect initial metrics.
 
 ## File Structure
 
@@ -427,7 +374,8 @@ simple/
 
 ## Additional Resources
 
+- [Docker Desktop Kubernetes Docs](https://docs.docker.com/desktop/kubernetes/)
 - [Pulumi Documentation](https://www.pulumi.com/docs/)
 - [kube-prometheus-stack Helm Chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
-- [Prometheus Operator](https://prometheus-operator.dev/)
+- [Prometheus Documentation](https://prometheus.io/docs/)
 - [Grafana Documentation](https://grafana.com/docs/)
